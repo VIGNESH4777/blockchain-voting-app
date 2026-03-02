@@ -7,6 +7,9 @@ const AdminLoginPage = () => {
     const navigate = useNavigate();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [adminOtp, setAdminOtp] = useState('');
+    const [showOtp, setShowOtp] = useState(false);
+    const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
     useEffect(() => {
@@ -16,19 +19,62 @@ const AdminLoginPage = () => {
         }
     }, [navigate]);
 
-    const handleLogin = (e) => {
+    const handleLogin = async (e) => {
         e.preventDefault();
         setError('');
 
         const ADMIN_EMAIL = 'electionofindia.gov@gmail.com';
         const ADMIN_PASS = '1234';
 
-        if (email === ADMIN_EMAIL && password === ADMIN_PASS) {
-            // Set token
-            localStorage.setItem('adminToken', 'true');
-            navigate('/admin');
+        if (!showOtp) {
+            if (email === ADMIN_EMAIL && password === ADMIN_PASS) {
+                setLoading(true);
+                try {
+                    const response = await fetch('http://localhost:5000/send-otp', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ phone: 'admin' })
+                    });
+                    const data = await response.json();
+                    if (data.success || data.otp) {
+                        setShowOtp(true);
+                        alert(`Admin OTP sent! Demo OTP: ${data.otp}`);
+                    } else {
+                        setError(data.error || 'Failed to send OTP.');
+                    }
+                } catch (err) {
+                    setError('Backend connection failed. Is server running?');
+                } finally {
+                    setLoading(false);
+                }
+            } else {
+                setError('Invalid Administrator Credentials');
+            }
         } else {
-            setError('Invalid Administrator Credentials');
+            if (!adminOtp) {
+                setError('Please enter OTP.');
+                return;
+            }
+            setLoading(true);
+            try {
+                const response = await fetch('http://localhost:5000/verify-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone: 'admin', otp: adminOtp })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    localStorage.setItem('adminToken', 'true');
+                    navigate('/admin');
+                } else {
+                    setError(data.error || 'Invalid OTP.');
+                }
+            } catch (err) {
+                setError('Verification failed.');
+            } finally {
+                setLoading(false);
+            }
         }
     };
 
@@ -77,36 +123,54 @@ const AdminLoginPage = () => {
                 </p>
 
                 <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <input
-                        type="email"
-                        placeholder="Official Email ID"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        style={{
-                            padding: '12px',
-                            borderRadius: '8px',
-                            border: '1px solid #D1D5DB',
-                            fontSize: '1rem'
-                        }}
-                    />
-                    <input
-                        type="password"
-                        placeholder="Password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        style={{
-                            padding: '12px',
-                            borderRadius: '8px',
-                            border: '1px solid #D1D5DB',
-                            fontSize: '1rem'
-                        }}
-                    />
+                    {!showOtp ? (
+                        <>
+                            <input
+                                type="email"
+                                placeholder="Official Email ID"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                style={{
+                                    padding: '12px',
+                                    borderRadius: '8px',
+                                    border: '1px solid #D1D5DB',
+                                    fontSize: '1rem'
+                                }}
+                            />
+                            <input
+                                type="password"
+                                placeholder="Password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                style={{
+                                    padding: '12px',
+                                    borderRadius: '8px',
+                                    border: '1px solid #D1D5DB',
+                                    fontSize: '1rem'
+                                }}
+                            />
+                        </>
+                    ) : (
+                        <input
+                            type="text"
+                            placeholder="Enter OTP"
+                            value={adminOtp}
+                            onChange={(e) => setAdminOtp(e.target.value)}
+                            style={{
+                                padding: '12px',
+                                borderRadius: '8px',
+                                border: '1px solid #D1D5DB',
+                                fontSize: '1rem'
+                            }}
+                        />
+                    )}
 
                     {error && <p style={{ color: 'red', fontSize: '0.9rem', margin: 0 }}>{error}</p>}
 
                     <button
                         type="submit"
                         className="button"
+                        disabled={loading}
                         style={{
                             width: '100%',
                             padding: '12px',
@@ -119,7 +183,7 @@ const AdminLoginPage = () => {
                             borderRadius: '8px'
                         }}
                     >
-                        Access Dashboard
+                        {loading ? 'Processing...' : (showOtp ? 'Verify & Login' : 'Get OTP')}
                     </button>
 
                     <p

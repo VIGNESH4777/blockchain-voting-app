@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useWeb3 } from '../contexts/Web3Context';
 import homeBg from '../assets/home-bg.png';
 import eciLogo from '../assets/eci-logo.png';
+import * as faceapi from 'face-api.js'; // Import face-api.js
 
 // Utility to log fraud
 const logSecurityEvent = (type, detail, severity = 'Medium') => {
@@ -30,6 +31,14 @@ const LoginPage = () => {
     const [password, setPassword] = useState('');
     const [otp, setOtp] = useState('');
     const [showOtpInput, setShowOtpInput] = useState(false);
+
+    // --- NEW: Face Verification State ---
+    const [showFaceVerification, setShowFaceVerification] = useState(false);
+    const [modelsLoaded, setModelsLoaded] = useState(false);
+    const [verificationStatus, setVerificationStatus] = useState(''); // 'scanning', 'success', 'failed'
+    const videoRef = useRef(null);
+    const streamRef = useRef(null);
+    // ------------------------------------
 
     // Form State - Voter Registration
     const [regFirstName, setRegFirstName] = useState('');
@@ -60,17 +69,152 @@ const LoginPage = () => {
     // Form State - Admin
     const [adminEmail, setAdminEmail] = useState('');
     const [adminPassword, setAdminPassword] = useState('');
+    const [adminOtp, setAdminOtp] = useState('');
+    const [showAdminOtp, setShowAdminOtp] = useState(false);
 
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
-
-    // Seed Demo Users (Optional/Legacy block removed for flow demonstration)
 
     // Redirect logic
     useEffect(() => {
         if (account && role === 'voter') navigate('/');
         if (role === 'admin' && localStorage.getItem('adminToken')) navigate('/admin');
     }, [account, role, navigate]);
+
+    // --- FACE API: Load Models ---
+    useEffect(() => {
+        const loadModels = async () => {
+            const MODEL_URL = '/models';
+            try {
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                ]);
+                setModelsLoaded(true);
+                console.log("FaceAPI Models Loaded");
+            } catch (err) {
+                console.error("Failed to load models:", err);
+            }
+        };
+        loadModels();
+    }, []);
+
+    // --- FACE API: Start Webcam ---
+    const startWebcam = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+            if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+            }
+            streamRef.current = stream;
+        } catch (err) {
+            console.error("Error accessing webcam:", err);
+            setError("Could not access webcam for verification.");
+            setShowFaceVerification(false);
+        }
+    };
+
+    // --- FACE API: Stop Webcam ---
+    const stopWebcam = () => {
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+        }
+    };
+
+    // Clean up webcam on unmount
+    useEffect(() => {
+        return () => stopWebcam();
+    }, []);
+
+    // --- FACE API: Verify Logic ---
+    const performFaceVerification = async () => {
+        if (!videoRef.current) return;
+        setVerificationStatus('scanning');
+        setError('');
+
+        try {
+            // 1. Detect Face in Webcam
+            const detection = await faceapi.detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.3 })).withFaceLandmarks().withFaceDescriptor();
+
+            if (!detection) {
+                setError("No face detected. Please position yourself clearly.");
+                setVerificationStatus('failed');
+                return;
+            }
+
+            // 2. Load Reference Image
+            // Note: Since we saved it as '1.jpg' under '7695963321' folder
+            // Clean mobile number (remove spaces, +91 if stored that way in folder)
+            // Our folder is '7695963321', but input might be '+91 ...'
+            const cleanMobile = mobileNumber.replace(/\D/g, '').slice(-10);
+            // Warning: If folder name differs, this 404s. Ensure folder is exactly the 10 digit number.
+
+            const imgUrl = `/labeled_images/${cleanMobile}/1.jpg`;
+
+            // Fetch verify existence first might be safer, but library throws if not found
+            // We use standard HTMLImageElement for faceapi
+            const img = await faceapi.fetchImage(imgUrl);
+            const refDetection = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.3 })).withFaceLandmarks().withFaceDescriptor();
+
+            if (!refDetection) {
+                setError("Could not find face in reference photo.");
+                setVerificationStatus('failed');
+                return;
+            }
+
+            // 3. Compare
+            const distance = faceapi.euclideanDistance(detection.descriptor, refDetection.descriptor);
+            console.log("Face Match Distance:", distance);
+
+            // Threshold typically 0.6
+            if (distance < 0.6) {
+                setVerificationStatus('success');
+                setTimeout(() => {
+                    stopWebcam();
+                    setShowFaceVerification(false);
+                    // PROCEED TO OTP
+                    proceedToOtp();
+                }, 1500);
+            } else {
+                setVerificationStatus('failed');
+                setError("Face verification failed. Not a match.");
+            }
+
+        } catch (err) {
+            console.error(err);
+            setError("Verification error. Model loading or Image missing.");
+            setVerificationStatus('failed');
+        }
+    };
+
+    const proceedToOtp = async () => {
+        // Request OTP
+        setLoading(true);
+        const inputMobile = mobileNumber.trim();
+        try {
+            const response = await fetch('http://localhost:5000/send-otp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone: inputMobile })
+            });
+            const data = await response.json();
+
+            if (data.success || data.otp) {
+                setShowOtpInput(true);
+                alert(`OTP sent to ${inputMobile}`);
+                if (data.otp) alert(`Demo OTP: ${data.otp}`);
+            } else {
+                setError(data.error || 'Failed to send OTP.');
+            }
+        } catch (err) {
+            setError('Backend connection failed. Is server running?');
+        } finally {
+            setLoading(false);
+        }
+    };
+
 
     // --- DIGILOCKER HANDLERS ---
     const handleDigiSendOtp = async (e) => {
@@ -111,6 +255,13 @@ const LoginPage = () => {
                 setRegDob('2005-12-20');
                 setRegAadhar('999988887777');
                 setFetchedWalletAddress('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
+            } else if (digiMobile === '9043282427') {
+                // Specific Demo User
+                setRegFirstName('sharan babu');
+                setRegLastName('A');
+                setRegDob('2005-08-25');
+                setRegAadhar('888855556666');
+                setFetchedWalletAddress('0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC');
             } else {
                 // Default Demo User
                 setRegFirstName('Vignesh');
@@ -166,28 +317,24 @@ const LoginPage = () => {
                 // Save current user for Profile
                 localStorage.setItem('currentUserMobile', inputMobile);
 
-                // Request OTP
-                setLoading(true);
-                try {
-                    const response = await fetch('http://localhost:5000/send-otp', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ phone: inputMobile })
-                    });
-                    const data = await response.json();
+                // *** FACE VERIFICATION CHECK ***
+                // Enforce face verification for specific target mobiles
+                const targetMobiles = ['7695963321', '6374798801', '9043282427'];
+                const cleanInput = inputMobile.replace(/\D/g, '').slice(-10);
 
-                    if (data.success || data.otp) {
-                        setShowOtpInput(true);
-                        alert(`OTP sent to ${inputMobile}`);
-                        if (data.otp) alert(`Demo OTP: ${data.otp}`);
-                    } else {
-                        setError(data.error || 'Failed to send OTP.');
+                if (targetMobiles.includes(cleanInput)) {
+                    if (!modelsLoaded) {
+                        setError("Face models loading... please wait.");
+                        return;
                     }
-                } catch (err) {
-                    setError('Backend connection failed. Is server running?');
-                } finally {
-                    setLoading(false);
+                    setShowFaceVerification(true);
+                    startWebcam();
+                    return; // Stop here, wait for verification
                 }
+
+                // If not the target user, proceed directly to OTP (skip face)
+                proceedToOtp();
+
             } else {
                 // Failure - Increment count and Log Fraud
                 const newAttempts = failedAttempts + 1;
@@ -281,19 +428,63 @@ const LoginPage = () => {
     };
 
     // --- ADMIN HANDLERS ---
-    const handleAdminLogin = (e) => {
+    const handleAdminLogin = async (e) => {
         e.preventDefault();
         setError('');
 
         const ADMIN_EMAIL = 'electionofindia.gov@gmail.com';
         const ADMIN_PASS = '1234';
 
-        if (adminEmail === ADMIN_EMAIL && adminPassword === ADMIN_PASS) {
-            localStorage.setItem('adminToken', 'true');
-            navigate('/admin');
+        if (!showAdminOtp) {
+            if (adminEmail === ADMIN_EMAIL && adminPassword === ADMIN_PASS) {
+                setLoading(true);
+                try {
+                    const response = await fetch('http://localhost:5000/send-otp', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ phone: 'admin' })
+                    });
+                    const data = await response.json();
+                    if (data.success || data.otp) {
+                        setShowAdminOtp(true);
+                        alert(`Admin OTP sent! Demo OTP: ${data.otp}`);
+                    } else {
+                        setError(data.error || 'Failed to send OTP.');
+                    }
+                } catch (err) {
+                    setError('Backend connection failed. Is server running?');
+                } finally {
+                    setLoading(false);
+                }
+            } else {
+                setError('Invalid Administrator Credentials');
+                logSecurityEvent('Unauthorized Admin Access', `Failed admin login: ${adminEmail}`, 'High');
+            }
         } else {
-            setError('Invalid Administrator Credentials');
-            logSecurityEvent('Unauthorized Admin Access', `Failed admin login: ${adminEmail}`, 'High');
+            if (!adminOtp) {
+                setError('Please enter OTP.');
+                return;
+            }
+            setLoading(true);
+            try {
+                const response = await fetch('http://localhost:5000/verify-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone: 'admin', otp: adminOtp })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    localStorage.setItem('adminToken', 'true');
+                    navigate('/admin');
+                } else {
+                    setError(data.error || 'Invalid OTP.');
+                }
+            } catch (err) {
+                setError('Verification failed.');
+            } finally {
+                setLoading(false);
+            }
         }
     };
 
@@ -315,6 +506,71 @@ const LoginPage = () => {
             left: 0,
             overflowY: 'auto'
         }}>
+            {/* FACE VERIFICATION MODAL OVERLAY */}
+            {showFaceVerification && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.8)',
+                    zIndex: 1000,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                }}>
+                    <div style={{
+                        background: 'white',
+                        padding: '20px',
+                        borderRadius: '12px',
+                        textAlign: 'center',
+                        maxWidth: '500px',
+                        width: '90%'
+                    }}>
+                        <h2 style={{ marginBottom: '15px' }}>Face Verification Required</h2>
+                        <div style={{
+                            width: '100%',
+                            height: '300px',
+                            background: '#000',
+                            marginBottom: '15px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            overflow: 'hidden'
+                        }}>
+                            <video
+                                ref={videoRef}
+                                autoPlay
+                                muted
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                        </div>
+
+                        {verificationStatus === 'scanning' && <p style={{ color: 'blue' }}>Scanning...</p>}
+                        {verificationStatus === 'success' && <p style={{ color: 'green', fontWeight: 'bold' }}>Verified! Redirecting...</p>}
+                        {verificationStatus === 'failed' && <p style={{ color: 'red', fontWeight: 'bold' }}>Verification Failed.</p>}
+                        {error && <p style={{ color: 'red' }}>{error}</p>}
+
+                        <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+                            <button
+                                onClick={performFaceVerification}
+                                className="button"
+                                style={{ padding: '10px 20px' }}
+                                disabled={verificationStatus === 'scanning' || verificationStatus === 'success'}
+                            >
+                                Verify Face
+                            </button>
+                            <button
+                                onClick={() => { setShowFaceVerification(false); stopWebcam(); setLoading(false); }}
+                                className="button"
+                                style={{ padding: '10px 20px', background: '#DC2626' }}
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div style={{
                 backgroundColor: 'rgba(255, 255, 255, 0.95)',
                 backdropFilter: 'blur(10px)',
@@ -483,6 +739,16 @@ const LoginPage = () => {
                                             Details have been fetched automatically.
                                         </div>
 
+                                        {/* Display Profile Photo if available */}
+                                        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '10px' }}>
+                                            <img
+                                                src={`/labeled_images/${regMobile}/1.jpg`}
+                                                alt="Profile"
+                                                style={{ width: '100px', height: '100px', borderRadius: '50%', objectFit: 'cover', border: '3px solid #E5E7EB' }}
+                                                onError={(e) => { e.target.style.display = 'none'; }}
+                                            />
+                                        </div>
+
                                         <label style={{ fontSize: '0.8rem', color: '#666', marginBottom: '-5px' }}>Full Name (Verified)</label>
                                         <div style={{ display: 'flex', gap: '5px' }}>
                                             <input type="text" placeholder="First Name" value={regFirstName} readOnly style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid #E5E7EB', background: '#F3F4F6' }} />
@@ -533,11 +799,19 @@ const LoginPage = () => {
                     <>
                         <p style={{ color: '#4B5563', marginBottom: '2rem' }}>Restricted Access.</p>
                         <form onSubmit={handleAdminLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                            <input type="email" placeholder="Email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #D1D5DB' }} />
-                            <input type="password" placeholder="Password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #D1D5DB' }} />
+                            {!showAdminOtp ? (
+                                <>
+                                    <input type="email" placeholder="Email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #D1D5DB' }} />
+                                    <input type="password" placeholder="Password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #D1D5DB' }} />
+                                </>
+                            ) : (
+                                <input type="text" placeholder="Enter OTP" value={adminOtp} onChange={(e) => setAdminOtp(e.target.value)} style={{ padding: '12px', borderRadius: '8px', border: '1px solid #D1D5DB' }} />
+                            )}
                             {error && <p style={{ color: 'red', fontSize: '0.9rem', margin: 0 }}>{error}</p>}
-                            <button type="submit" className="button" style={{ marginTop: '0.5rem', cursor: 'pointer', padding: '12px', backgroundColor: '#DC2626', color: 'white', border: 'none' }}>Access Dashboard</button>
-                            <div style={{ display: 'flex', justifyContent: 'center', fontSize: '0.9rem', marginTop: '1rem' }}><span onClick={() => { setRole(null); setError(''); }} style={{ color: '#6B7280', cursor: 'pointer' }}>Back</span></div>
+                            <button type="submit" className="button" disabled={loading} style={{ marginTop: '0.5rem', cursor: 'pointer', padding: '12px', backgroundColor: '#DC2626', color: 'white', border: 'none' }}>
+                                {loading ? 'Processing...' : (showAdminOtp ? 'Verify & Login' : 'Get OTP')}
+                            </button>
+                            <div style={{ display: 'flex', justifyContent: 'center', fontSize: '0.9rem', marginTop: '1rem' }}><span onClick={() => { setRole(null); setError(''); setShowAdminOtp(false); setAdminEmail(''); setAdminPassword(''); setAdminOtp(''); }} style={{ color: '#6B7280', cursor: 'pointer' }}>Back</span></div>
                         </form>
                     </>
                 )}

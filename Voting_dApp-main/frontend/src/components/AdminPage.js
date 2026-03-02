@@ -3,25 +3,14 @@ import { useWeb3 } from '../contexts/Web3Context';
 import { useNavigate } from 'react-router-dom';
 import MonitoringDashboard from './MonitoringDashboard';
 
+
+
 function parseList(input) {
   return input.split(',').map(s => s.trim()).filter(Boolean);
 }
 
-function getRevertReason(error) {
-  const message = error?.message || '';
-  const match = message.match(/revert\s*([^"]*)/);
-  if (match && match[1]) return match[1].trim();
-  if (error?.data?.message) return error.data.message;
-  // fallback: try nested structures
-  if (error?.data && typeof error.data === 'string') {
-    const m = error.data.match(/reverted with reason string '([^']+)'/);
-    if (m && m[1]) return m[1];
-  }
-  return 'An unknown error occurred.';
-}
-
 const AdminPage = () => {
-  const { account, isAdmin, contract, owner, chainId, switchNetwork, connectWallet } = useWeb3();
+  const { account, isAdmin, contract, owner, chainId, switchNetwork, connectWallet, getRevertReason } = useWeb3();
   const navigate = useNavigate();
 
   // Redirect if not logged in as Admin via Email
@@ -43,6 +32,11 @@ const AdminPage = () => {
   const [message, setMessage] = useState(null); // { type: 'error'|'success', text: string }
   const [voterList, setVoterList] = useState([]);
   const [candidates, setCandidates] = useState([]);
+
+  // Clear message when account changes to prevent lingering errors
+  useEffect(() => {
+    setMessage(null);
+  }, [account]);
 
   // Navigation State
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'management'
@@ -136,6 +130,18 @@ const AdminPage = () => {
       await contract.methods.registerVotersForElection(selectedElection, list).send({ from: account });
       showSuccess('Bulk registration complete.');
       setBulkVotersCsv('');
+      await fetchSelectedDetails(selectedElection);
+    } catch (err) {
+      showError(getRevertReason(err));
+    }
+  };
+
+  const handleRemoveVoter = async (voterAddr) => {
+    if (!contract || !isAdmin || !selectedElection) { showError('Select election and ensure you are admin.'); return; }
+    try {
+      showSuccess('Removing voter...');
+      await contract.methods.removeVoter(selectedElection, voterAddr).send({ from: account });
+      showSuccess('Voter removed successfully.');
       await fetchSelectedDetails(selectedElection);
     } catch (err) {
       showError(getRevertReason(err));
@@ -278,7 +284,19 @@ const AdminPage = () => {
 
                   <div style={{ marginTop: 12 }}>
                     <h4>Registered Voters ({voterList.length})</h4>
-                    <ul className="voter-list">{voterList.map((v, i) => <li key={v + i}>{v}</li>)}</ul>
+                    <ul className="voter-list">
+                      {voterList.map((v, i) => (
+                        <li key={v + i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                          <span>{v}</span>
+                          <button
+                            onClick={() => handleRemoveVoter(v)}
+                            style={{ padding: '4px 8px', background: '#DC2626', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 </div>
               </div>

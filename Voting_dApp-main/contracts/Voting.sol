@@ -65,6 +65,25 @@ contract Voting {
         emit VoterRegistered(_electionId, _voterAddress);
     }
 
+    // remove a registered voter for a specific election
+    function removeVoter(uint _electionId, address _voterAddress) public onlyOwner {
+        require(elections[_votingIdOrCheck(_electionId)].exists, "Election does not exist.");
+        Election storage e = elections[_electionId];
+        require(e.registeredVoters[_voterAddress], "Voter is not registered.");
+        require(!e.hasVoted[_voterAddress], "Voter has already voted; cannot be removed.");
+
+        e.registeredVoters[_voterAddress] = false;
+
+        // Remove from the voters array
+        for (uint i = 0; i < e.voters.length; i++) {
+            if (e.voters[i] == _voterAddress) {
+                e.voters[i] = e.voters[e.voters.length - 1];
+                e.voters.pop();
+                break;
+            }
+        }
+    }
+
     // register multiple voters at once
     function registerVotersForElection(uint _electionId, address[] memory _voters) public onlyOwner {
         require(elections[_electionId].exists, "Election does not exist.");

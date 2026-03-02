@@ -13,7 +13,7 @@ import UserProfile from './components/UserProfile';
 
 // Navbar consumes context (must be inside provider)
 const NavBar = () => {
-  const { isOwner, owner, account, logout } = useWeb3(); // Assuming 'isOwner' or just check account against owner
+  const { owner, account, logout, isAdmin } = useWeb3();
   const [showProfile, setShowProfile] = React.useState(false);
   const currentUserMobile = localStorage.getItem('currentUserMobile');
 
@@ -30,7 +30,7 @@ const NavBar = () => {
         <nav>
           <Link to="/">Home</Link>
 
-          {localStorage.getItem('adminToken') ? (
+          {isAdmin || localStorage.getItem('adminToken') ? (
             <Link to="/admin">Admin Dashboard</Link>
           ) : (
             <>
@@ -42,7 +42,7 @@ const NavBar = () => {
         <div style={{ marginLeft: 16, fontSize: 12, color: '#666', display: 'flex', alignItems: 'center', gap: '15px' }}>
 
           {/* PROFILE BUTTON - Left of Owner */}
-          {!localStorage.getItem('adminToken') && (
+          {!(isAdmin || localStorage.getItem('adminToken')) && (
             <button
               onClick={() => setShowProfile(true)}
               style={{

@@ -87,6 +87,27 @@ const VotingPage = () => {
   }, [timer]);
 
 
+  /* -------------------------------------------------------------
+     * NEW: 120s Session Timer Logic (Client-Side)
+     * ------------------------------------------------------------- */
+  const [votingDuration, setVotingDuration] = useState(120);
+
+  useEffect(() => {
+    if (votingDuration <= 0) return;
+    const interval = setInterval(() => {
+      setVotingDuration((prev) => prev - 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [votingDuration]);
+
+  // Format time as mm:ss
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+  /* ------------------------------------------------------------- */
+
   const handleVote = async (index) => {
     if (!contract || !selectedElection) return;
     try {
@@ -103,6 +124,26 @@ const VotingPage = () => {
   return (
     <div className="page-container">
       <h2>Voting Booth</h2>
+
+      {/* NEW: Session Timer Display */}
+      <div
+        style={{
+          position: 'fixed',
+          top: '80px',
+          right: '20px',
+          padding: '10px 20px',
+          borderRadius: '8px',
+          backgroundColor: votingDuration < 10 ? '#FEE2E2' : '#E1EFFE',
+          border: `2px solid ${votingDuration < 10 ? '#EF4444' : '#3B82F6'}`,
+          color: votingDuration < 10 ? '#EF4444' : '#1E40AF',
+          fontWeight: 'bold',
+          fontSize: '1.2rem',
+          zIndex: 1000,
+          boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+        }}
+      >
+        ⏱ Session Time: {formatTime(votingDuration)}
+      </div>
 
       <div className="card" style={{ padding: 16 }}>
         <h3>Select Election</h3>
@@ -134,6 +175,14 @@ const VotingPage = () => {
             {timeLeft}
           </div>
 
+          {/* Warning text if session is expiring */}
+          {votingDuration < 10 && votingDuration > 0 && (
+            <p style={{ color: 'red', fontWeight: 'bold' }}>Hurry! Session expiring soon!</p>
+          )}
+          {votingDuration === 0 && (
+            <p style={{ color: 'red', fontWeight: 'bold', fontSize: '1.2rem' }}>⚠️ Session Expired. Please refresh to vote.</p>
+          )}
+
           {candidates.length === 0 ? <p>No candidates found.</p> : (
             <div className="candidate-grid">
               {candidates.map((name, i) => (
@@ -141,14 +190,18 @@ const VotingPage = () => {
                   <h4>{name}</h4>
                   <button
                     className="button"
-                    disabled={!isRegistered || hasVoted || timeStatus !== 'Active'}
+                    // Modified Disabled Logic to include votingDuration === 0
+                    disabled={!isRegistered || hasVoted || timeStatus !== 'Active' || votingDuration === 0}
                     onClick={() => handleVote(i)}
                     style={{
-                      backgroundColor: timeStatus !== 'Active' ? '#9CA3AF' : undefined,
-                      cursor: timeStatus !== 'Active' ? 'not-allowed' : 'pointer'
+                      backgroundColor: (timeStatus !== 'Active' || votingDuration === 0) ? '#9CA3AF' : undefined,
+                      cursor: (timeStatus !== 'Active' || votingDuration === 0) ? 'not-allowed' : 'pointer'
                     }}
                   >
-                    {hasVoted ? "Voted" : (timeStatus === 'Upcoming' ? "Wait to Start" : (timeStatus === 'Ended' ? "Election Ended" : "Vote"))}
+                    {hasVoted ? "Voted" : (
+                      votingDuration === 0 ? "Time Expired" :
+                        (timeStatus === 'Upcoming' ? "Wait to Start" : (timeStatus === 'Ended' ? "Election Ended" : "Vote"))
+                    )}
                   </button>
                 </div>
               ))}

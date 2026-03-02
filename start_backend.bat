@@ -1,3 +1,3 @@
 @echo off
-cd backend
+cd Voting_dApp-main\backend
 npm start
